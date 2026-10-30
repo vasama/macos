@@ -2,7 +2,7 @@ name: macOS SSH session
 description: Open an SSH session into the macOS runner through a Cloudflare quick tunnel.
 
 inputs:
-  minutes:
+  timeout:
     description: How long to keep the session open, 1-350 minutes.
     default: "60"
   github-user:
@@ -17,31 +17,38 @@ runs:
   steps:
     - name: Check runner OS
       if: runner.os != 'macOS'
-      shell: bash
+      shell: pwsh
       run: |
-        echo "::error::This action only supports macOS runners."
+        Write-Host '::error::This action only supports macOS runners.'
         exit 1
 
     - name: Install cloudflared
-      shell: bash
-      run: command -v cloudflared > /dev/null || brew install cloudflared
-      env:
-        HOMEBREW_NO_AUTO_UPDATE: "1"
-        HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      shell: pwsh
+      run: |
+        if (-not (Get-Command cloudflared -ErrorAction Ignore)) {
+          $Arch = @{ X64 = 'amd64'; ARM64 = 'arm64' }[$env:RUNNER_ARCH]
+          if (-not $Arch) {
+            Write-Host "::error::No cloudflared release for runner architecture $env:RUNNER_ARCH."
+            exit 1
+          }
+          $Dir = Join-Path $env:RUNNER_TEMP 'cloudflared'
+          $Archive = Join-Path $Dir 'cloudflared.tgz'
+          New-Item -ItemType Directory -Force -Path $Dir | Out-Null
+          Invoke-WebRequest -Uri "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-darwin-$Arch.tgz" -OutFile $Archive -MaximumRetryCount 3
+          tar -xzf $Archive -C $Dir
+          Add-Content -Path $env:GITHUB_PATH -Value $Dir
+        }
 
-    - name: Start sshd
-      shell: bash
-      run: ${{ github.action_path }}/scripts/start-sshd.sh
+    # Inputs reach the script through env rather than being expanded into
+    # the command line, where they would be parsed as PowerShell code.
+    - name: SSH session
+      shell: pwsh
+      run: |
+        ${{ github.action_path }}/scripts/Start-Session.ps1 `
+          -GitHubUser $env:INPUT_GITHUB_USER `
+          -AuthorizedKeys $env:INPUT_AUTHORIZED_KEYS `
+          -Timeout $env:INPUT_TIMEOUT
       env:
-        AUTHORIZED_GITHUB_USER: ${{ inputs.github-user }}
-        EXTRA_AUTHORIZED_KEYS: ${{ inputs.authorized-keys }}
-
-    - name: Open tunnel
-      shell: bash
-      run: ${{ github.action_path }}/scripts/start-tunnel.sh
-
-    - name: Hold session
-      shell: bash
-      run: ${{ github.action_path }}/scripts/hold-session.sh
-      env:
-        MINUTES: ${{ inputs.minutes }}
+        INPUT_GITHUB_USER: ${{ inputs.github-user }}
+        INPUT_AUTHORIZED_KEYS: ${{ inputs.authorized-keys }}
+        INPUT_TIMEOUT: ${{ inputs.timeout }}
