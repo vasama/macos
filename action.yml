@@ -1,0 +1,47 @@
+name: macOS SSH session
+description: Open an SSH session into the macOS runner through a Cloudflare quick tunnel.
+
+inputs:
+  minutes:
+    description: How long to keep the session open, 1-350 minutes.
+    default: "60"
+  github-user:
+    description: GitHub user whose published SSH keys (github.com/<user>.keys) may log in.
+    default: ${{ github.triggering_actor }}
+  authorized-keys:
+    description: Additional authorized_keys lines that may log in.
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Check runner OS
+      if: runner.os != 'macOS'
+      shell: bash
+      run: |
+        echo "::error::This action only supports macOS runners."
+        exit 1
+
+    - name: Install cloudflared
+      shell: bash
+      run: command -v cloudflared > /dev/null || brew install cloudflared
+      env:
+        HOMEBREW_NO_AUTO_UPDATE: "1"
+        HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+    - name: Start sshd
+      shell: bash
+      run: ${{ github.action_path }}/scripts/start-sshd.sh
+      env:
+        AUTHORIZED_GITHUB_USER: ${{ inputs.github-user }}
+        EXTRA_AUTHORIZED_KEYS: ${{ inputs.authorized-keys }}
+
+    - name: Open tunnel
+      shell: bash
+      run: ${{ github.action_path }}/scripts/start-tunnel.sh
+
+    - name: Hold session
+      shell: bash
+      run: ${{ github.action_path }}/scripts/hold-session.sh
+      env:
+        MINUTES: ${{ inputs.minutes }}
